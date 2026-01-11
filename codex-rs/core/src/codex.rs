@@ -20,6 +20,9 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::hooks::HookContext;
+use crate::hooks::HooksManager;
+use crate::hooks::build_session_start_hook_payload;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -495,6 +498,17 @@ impl Session {
         per_turn_config
     }
 
+    pub(crate) fn conversation_id(&self) -> ThreadId {
+        self.conversation_id
+    }
+
+    pub(crate) async fn rollout_path(&self) -> Option<PathBuf> {
+        let rollout = self.services.rollout.lock().await;
+        rollout
+            .as_ref()
+            .map(|recorder| recorder.rollout_path.clone())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
         auth_manager: Option<Arc<AuthManager>>,
@@ -688,6 +702,7 @@ impl Session {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(config.notify.clone()),
+            hooks: config.hooks.clone().map(HooksManager::new),
             rollout: Mutex::new(Some(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -710,6 +725,21 @@ impl Session {
             services,
             next_internal_sub_id: AtomicU64::new(0),
         });
+
+        if let Some(hooks) = sess.services.hooks.as_ref() {
+            let session_start_source = match &initial_history {
+                InitialHistory::New => "startup",
+                InitialHistory::Resumed(_) => "resume",
+                InitialHistory::Forked(_) => "clear",
+            };
+            let context = HookContext {
+                session_id: sess.conversation_id().to_string(),
+                transcript_path: rollout_path.display().to_string(),
+                hook_event_name: "SessionStart".to_string(),
+            };
+            let payload = build_session_start_hook_payload(&context, session_start_source);
+            let _ = hooks.run_session_start(&payload).await;
+        }
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -1765,6 +1795,8 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::hooks::HookContext;
+    use crate::hooks::build_user_prompt_submit_hook_payload;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -1797,6 +1829,16 @@ mod handlers {
     use std::sync::Arc;
     use tracing::info;
     use tracing::warn;
+
+    fn prompt_text(items: &[UserInput]) -> String {
+        let mut parts = Vec::new();
+        for item in items {
+            if let UserInput::Text { text } = item {
+                parts.push(text.as_str());
+            }
+        }
+        parts.join("\n")
+    }
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
@@ -1868,6 +1910,23 @@ mod handlers {
             .client
             .get_otel_manager()
             .user_prompt(&items);
+
+        if let Some(hooks) = sess.services.hooks.as_ref() {
+            let prompt = prompt_text(&items);
+            let transcript_path = sess
+                .rollout_path()
+                .await
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            let context = HookContext {
+                session_id: sess.conversation_id().to_string(),
+                transcript_path,
+                hook_event_name: "UserPromptSubmit".to_string(),
+            };
+            let payload =
+                build_user_prompt_submit_hook_payload(&context, &prompt, &current_context.cwd);
+            let _ = hooks.run_user_prompt_submit(&payload).await;
+        }
 
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
@@ -3531,6 +3590,7 @@ mod tests {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
+            hooks: None,
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -3625,6 +3685,7 @@ mod tests {
             mcp_startup_cancellation_token: CancellationToken::new(),
             unified_exec_manager: UnifiedExecProcessManager::default(),
             notifier: UserNotifier::new(None),
+            hooks: None,
             rollout: Mutex::new(None),
             user_shell: Arc::new(default_user_shell()),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
