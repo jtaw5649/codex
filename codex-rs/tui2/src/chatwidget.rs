@@ -33,6 +33,7 @@ use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::ExecCommandSource;
 use codex_core::protocol::ExitedReviewModeEvent;
+use codex_core::protocol::HookActivityEvent;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::ListSkillsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
@@ -862,6 +863,12 @@ impl ChatWidget {
             event.path,
             &self.config.cwd,
         ));
+        self.request_redraw();
+    }
+
+    fn on_hook_activity(&mut self, event: HookActivityEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_hook_activity_event(event));
         self.request_redraw();
     }
 
@@ -1951,6 +1958,7 @@ impl ChatWidget {
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
             EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
+            EventMsg::HookActivity(ev) => self.on_hook_activity(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),

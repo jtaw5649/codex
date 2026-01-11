@@ -22,6 +22,7 @@ use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
+use crate::hooks::HooksConfig;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::OLLAMA_OSS_PROVIDER_ID;
@@ -174,6 +175,9 @@ pub struct Config {
     ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// Optional hook configuration for tool/lifecycle events.
+    pub hooks: Option<HooksConfig>,
 
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
@@ -713,6 +717,10 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Hook commands to run at lifecycle events.
+    #[serde(default)]
+    pub hooks: Option<HooksConfig>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -1350,6 +1358,7 @@ impl Config {
             forced_auto_mode_downgraded_on_windows,
             shell_environment_policy,
             notify: cfg.notify,
+            hooks: cfg.hooks,
             user_instructions,
             base_instructions,
             developer_instructions,
@@ -1590,6 +1599,7 @@ mod tests {
     use crate::config::types::McpServerTransportConfig;
     use crate::config::types::Notifications;
     use crate::features::Feature;
+    use crate::hooks::HookCommandConfig;
 
     use super::*;
     use core_test_support::test_absolute_path;
@@ -1628,6 +1638,34 @@ persistence = "none"
             }),
             history_no_persistence_cfg.history
         );
+    }
+
+    #[test]
+    fn hooks_config_is_applied_to_runtime_config() -> std::io::Result<()> {
+        let hooks_config = r#"
+[hooks]
+  [[hooks.session_start]]
+  command = ["tdd-guard"]
+  matcher = "startup|resume|clear"
+"#;
+        let parsed = toml::from_str::<ConfigToml>(hooks_config)
+            .expect("TOML deserialization should succeed");
+        let codex_home = tempdir().expect("create temp dir");
+        let config = Config::load_from_base_config_with_overrides(
+            parsed,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        let hooks = config.hooks.expect("hooks should be set");
+        assert_eq!(
+            hooks.session_start,
+            vec![HookCommandConfig {
+                matcher: Some("startup|resume|clear".to_string()),
+                command: vec!["tdd-guard".to_string()],
+                timeout_ms: None,
+            }]
+        );
+        Ok(())
     }
 
     #[test]
@@ -3241,6 +3279,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
+                hooks: None,
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: HashMap::new(),
@@ -3327,6 +3366,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3428,6 +3468,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),
@@ -3515,6 +3556,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: HashMap::new(),

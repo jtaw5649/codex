@@ -17,3 +17,8 @@ Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the c
 Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
 
 - https://developers.openai.com/codex/config-reference
+
+## Hooks
+
+Codex can run synchronous hooks for session lifecycle, user prompts, and tool usage.
+See `docs/hooks.md` for configuration and payload details.

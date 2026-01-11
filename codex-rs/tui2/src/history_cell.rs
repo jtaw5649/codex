@@ -25,6 +25,7 @@ use codex_common::format_env_display::format_env_display;
 use codex_core::config::Config;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::HookActivityEvent;
 use codex_core::protocol::McpAuthStatus;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SessionConfiguredEvent;
@@ -1009,12 +1010,13 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         let make_row = |spans: Vec<Span<'static>>| Line::from(spans);
 
-        // Title line rendered inside the box: ">_ OpenAI Codex (vX)"
+        // Title line rendered inside the box: ">_ OpenAI Codex (vX) jtaw edition"
         let title_spans: Vec<Span<'static>> = vec![
             Span::from(">_ ").dim(),
             Span::from("OpenAI Codex").bold(),
             Span::from(" ").dim(),
             Span::from(format!("(v{})", self.version)).dim(),
+            Span::from(" jtaw edition").dim(),
         ];
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
@@ -1311,6 +1313,46 @@ fn try_new_completed_mcp_tool_call_with_image_output(
 #[allow(clippy::disallowed_methods)]
 pub(crate) fn new_warning_event(message: String) -> PrefixedWrappedHistoryCell {
     PrefixedWrappedHistoryCell::new(message.yellow(), "⚠ ".yellow(), "  ")
+}
+
+pub(crate) fn new_hook_activity_event(event: HookActivityEvent) -> PlainHistoryCell {
+    let tool_label = event
+        .tool
+        .map(|tool| format!("{} {}", tool.past_tense, tool.name))
+        .unwrap_or_else(|| "Blocked tool".to_string());
+    let mut lines: Vec<Line<'static>> =
+        vec![vec!["• ".dim(), tool_label.bold(), " (blocked)".dim()].into()];
+
+    let hook_names = if event.hooks.is_empty() {
+        None
+    } else {
+        Some(
+            event
+                .hooks
+                .into_iter()
+                .map(|hook| hook.name)
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    };
+    let hook_line = match hook_names {
+        Some(names) => format!("blocked by hook: {names}"),
+        None => "blocked by hook".to_string(),
+    };
+    lines.push(vec!["  └ ".dim(), hook_line.dim()].into());
+
+    if let Some(reason) = event.reason {
+        for (idx, line) in reason.lines().enumerate() {
+            let content = line.to_string().dim();
+            if idx == 0 {
+                lines.push(vec!["    └ ".dim(), content].into());
+            } else {
+                lines.push(vec!["      ".dim(), content].into());
+            }
+        }
+    }
+
+    PlainHistoryCell { lines }
 }
 
 #[derive(Debug)]
@@ -1762,6 +1804,10 @@ mod tests {
     use std::collections::HashMap;
 
     use codex_core::protocol::ExecCommandSource;
+    use codex_core::protocol::HookActivityEvent;
+    use codex_core::protocol::HookActivityHook;
+    use codex_core::protocol::HookActivityStatus;
+    use codex_core::protocol::HookActivityTool;
     use mcp_types::CallToolResult;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
@@ -2064,6 +2110,32 @@ mod tests {
         let rendered = render_lines(&cell.display_lines(64));
 
         assert_eq!(rendered, vec!["• Searched short query".to_string()]);
+    }
+
+    #[test]
+    fn hook_activity_history_cell_renders_blocked_tree() {
+        let cell = new_hook_activity_event(HookActivityEvent {
+            status: HookActivityStatus::Blocked,
+            reason: Some("write the failing test first".into()),
+            tool: Some(HookActivityTool {
+                name: "Edit".into(),
+                past_tense: "Edited".into(),
+            }),
+            hooks: vec![HookActivityHook {
+                name: "tdd-guard".into(),
+                decision: "block".into(),
+            }],
+        });
+
+        let rendered = render_lines(&cell.display_lines(64));
+        assert_eq!(
+            rendered,
+            vec![
+                "• Edited Edit (blocked)".to_string(),
+                "  └ blocked by hook: tdd-guard".to_string(),
+                "    └ write the failing test first".to_string(),
+            ]
+        );
     }
 
     #[test]
